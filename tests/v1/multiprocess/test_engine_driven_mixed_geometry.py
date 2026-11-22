@@ -76,7 +76,8 @@ def test_groups_with_unequal_block_sizes_register_the_whole_chunk() -> None:
         sent.append(payload)
         future = MagicMock()
         future.result.return_value = RegisterEngineDrivenContextResponse(
-            shm_name="lmcache_l1_pool_mixed", pool_size=4096
+            shm_name="" if payload.force_inline else "lmcache_l1_pool_mixed",
+            pool_size=4096,
         )
         return future
 

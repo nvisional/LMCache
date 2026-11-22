@@ -233,6 +233,9 @@ class RegisterEngineDrivenContextPayload(msgspec.Struct):
             in protocol group order. Empty means legacy single-group; the
             top-level ``num_layers``/``hidden_dim_size``/``dtype_str`` then
             describe the sole group.
+        force_inline: Whether the worker could not attach the advertised SHM
+            pool and transfers KV inline; the server then uses the inline
+            strategy for this worker.
     """
 
     instance_id: int
@@ -245,6 +248,7 @@ class RegisterEngineDrivenContextPayload(msgspec.Struct):
     use_mla: bool
     num_physical_slots: int | None = None
     group_layouts: list[GroupLayout] = []
+    force_inline: bool = False
 
 
 @dataclass

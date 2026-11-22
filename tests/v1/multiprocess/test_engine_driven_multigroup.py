@@ -347,7 +347,8 @@ def test_register_accepts_sliding_window_groups() -> None:
         sent.append(payload)
         future = MagicMock()
         future.result.return_value = RegisterEngineDrivenContextResponse(
-            shm_name="lmcache_l1_pool_x", pool_size=4096
+            shm_name="" if payload.force_inline else "lmcache_l1_pool_x",
+            pool_size=4096,
         )
         return future
 
@@ -768,7 +769,8 @@ def test_register_payload_carries_group_layouts() -> None:
         sent.append(payload)
         future = MagicMock()
         future.result.return_value = RegisterEngineDrivenContextResponse(
-            shm_name="lmcache_l1_pool_x", pool_size=4096
+            shm_name="" if payload.force_inline else "lmcache_l1_pool_x",
+            pool_size=4096,
         )
         return future
 
@@ -816,7 +818,8 @@ def _register_capturing_payload(
         sent.append(payload)
         future = MagicMock()
         future.result.return_value = RegisterEngineDrivenContextResponse(
-            shm_name="lmcache_l1_pool_x", pool_size=4096
+            shm_name="" if payload.force_inline else "lmcache_l1_pool_x",
+            pool_size=4096,
         )
         return future
 
@@ -1068,7 +1071,8 @@ def test_register_uses_adapter_chunk_size_over_local_group_lcm() -> None:
             sent.append(payload)
             future = MagicMock()
             future.result.return_value = RegisterEngineDrivenContextResponse(
-                shm_name="lmcache_l1_pool_x", pool_size=4096
+                shm_name="" if payload.force_inline else "lmcache_l1_pool_x",
+                pool_size=4096,
             )
             return future
 

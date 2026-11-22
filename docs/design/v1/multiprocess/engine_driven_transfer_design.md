@@ -133,7 +133,10 @@ and block-id flattening), then submits all three phases to a background
 
 During `register`, worker receives `RegisterEngineDrivenContextResponse(shm_name, pool_size)`
 from server and then calls `create_engine_driven_context(...)` to construct
-`EngineDrivenContextInline` or `EngineDrivenContextShm`.
+`EngineDrivenContextInline` or `EngineDrivenContextShm`. If the server
+advertised a pool that the worker cannot attach, the worker re-registers with
+`force_inline=True` so the server also switches that instance to
+`InlineTransferStrategy`; registration fails if the server keeps advertising SHM.
 
 Why `prepare → data operation → commit`:
 - `prepare_*`: set up transport state (for SHM this allocates/returns shared buffers;

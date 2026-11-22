@@ -976,6 +976,127 @@ def test_engine_driven_register_sends_num_physical_slots(
     req_client.unregister_kv_cache_engine_driven_context.assert_called_once_with(1)
 
 
+def test_engine_driven_shm_attach_fallback_retrieves_inline(
+    monkeypatch: pytest.MonkeyPatch,
+    server_module_factory: ServerModuleFactory,
+) -> None:
+    """A worker that cannot attach the advertised SHM pool falls back to
+    inline, so the server must answer its retrieves with inline payloads
+    instead of SHM slot descriptors it cannot read."""
+    # First Party
+    from lmcache.v1.client import worker_transfer
+    from lmcache.v1.client.worker_transfer import EngineDrivenTransferContext
+
+    tensor = torch.arange(2 * 2 * 8 * 16, dtype=torch.float32).reshape(2, 2, 8, 16)
+    memory_obj = MagicMock()
+    memory_obj.tensor = tensor
+    memory_obj.shm_offset = 0
+    memory_obj.shm_byte_length = tensor.nbytes
+    storage = MagicMock()
+    storage.unsafe_read.return_value = (["obj"], [memory_obj])
+
+    @contextmanager
+    def read_prefetched(
+        _keys: object, l1_owners: object = None
+    ) -> Iterator[list[MagicMock]]:
+        yield [memory_obj]
+
+    storage.read_prefetched_results.side_effect = read_prefetched
+    module, _, _, _ = server_module_factory(
+        storage_manager_config=_make_storage_manager_config(
+            shm_name="lmcache_missing_shm_segment", pool_size=4096
+        ),
+        mock_storage=storage,
+    )
+
+    def _resolved(value: Any) -> MagicMock:
+        future = MagicMock()
+        future.result.return_value = value
+        return future
+
+    req_client = MagicMock()
+    req_client.register_kv_cache_engine_driven_context.side_effect = (
+        lambda payload: _resolved(
+            module.register_kv_cache_engine_driven_context(payload)
+        )
+    )
+    req_client.prepare_retrieve.side_effect = lambda key, instance_id: _resolved(
+        module.prepare_retrieve(key, instance_id)
+    )
+    monkeypatch.setattr(
+        worker_transfer,
+        "compute_kv_layout",
+        lambda *_args, **_kwargs: (
+            4,
+            2,
+            16,
+            "float32",
+            lmcache_native.EngineKVFormat.NL_X_TWO_NB_BS_NH_HS,
+            2,
+        ),
+    )
+
+    EngineDrivenTransferContext(3, req_client).register(
+        kv_caches=_make_kv_caches(),
+        model_name="m",
+        world_size=1,
+        blocks_in_chunk=2,
+        mq_timeout=1.0,
+    )
+
+    inline = EngineDrivenContextInline(
+        EngineDrivenContextMetadata(
+            layout_desc=MemoryLayoutDesc(shapes=[tensor.shape], dtypes=[tensor.dtype]),
+            block_size=4,
+            use_mla=False,
+        ),
+        req_client,
+        mq_timeout=1.0,
+    )
+    chunks = inline.prepare_retrieve(_default_key(), 3, expected_count=1)
+
+    assert chunks is not None
+    assert torch.equal(chunks[0], tensor)
+
+
+def test_engine_driven_register_raises_when_server_keeps_shm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the server cannot be switched to inline, registration must report
+    the SHM attach failure instead of leaving the peers mismatched."""
+    # First Party
+    from lmcache.v1.client import worker_transfer
+    from lmcache.v1.client.worker_transfer import EngineDrivenTransferContext
+
+    monkeypatch.setattr(
+        worker_transfer,
+        "compute_kv_layout",
+        lambda *_args, **_kwargs: (
+            4,
+            2,
+            16,
+            "float32",
+            lmcache_native.EngineKVFormat.NL_X_TWO_NB_BS_NH_HS,
+            2,
+        ),
+    )
+    future = MagicMock()
+    future.result.return_value = RegisterEngineDrivenContextResponse(
+        shm_name="lmcache_missing_shm_segment", pool_size=4096
+    )
+    req_client = MagicMock()
+    req_client.register_kv_cache_engine_driven_context.return_value = future
+
+    with pytest.raises(RuntimeError, match="lmcache_missing_shm_segment"):
+        EngineDrivenTransferContext(4, req_client).register(
+            kv_caches=_make_kv_caches(),
+            model_name="m",
+            world_size=1,
+            blocks_in_chunk=2,
+            mq_timeout=1.0,
+        )
+
+
 def test_engine_driven_context_unregister_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

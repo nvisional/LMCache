@@ -1066,21 +1066,20 @@ class EngineDrivenTransferContext(TransferContext):
             num_physical_slots = blocks_in_chunk * block_size
         self._group_states = group_states
 
+        payload = RegisterEngineDrivenContextPayload(
+            instance_id=self._instance_id,
+            model_name=model_name,
+            world_size=world_size,
+            block_size=block_size,
+            num_layers=num_layers,
+            hidden_dim_size=hidden_dim_size,
+            dtype_str=dtype_str,
+            use_mla=use_mla_flag,
+            num_physical_slots=num_physical_slots,
+            group_layouts=group_layouts,
+        )
         future = self._submit_registration(
-            lambda: self._req_client.register_kv_cache_engine_driven_context(
-                RegisterEngineDrivenContextPayload(
-                    instance_id=self._instance_id,
-                    model_name=model_name,
-                    world_size=world_size,
-                    block_size=block_size,
-                    num_layers=num_layers,
-                    hidden_dim_size=hidden_dim_size,
-                    dtype_str=dtype_str,
-                    use_mla=use_mla_flag,
-                    num_physical_slots=num_physical_slots,
-                    group_layouts=group_layouts,
-                )
-            )
+            lambda: self._req_client.register_kv_cache_engine_driven_context(payload)
         )
         response = future.result(timeout=mq_timeout)
         if self._is_closed():
@@ -1107,7 +1106,25 @@ class EngineDrivenTransferContext(TransferContext):
             shm_name=shm_name,
             pool_size=pool_size,
         )
-        supported_transfer_mode = "SHM" if shm_name and pool_size > 0 else "inline"
+        uses_inline = isinstance(self._engine_driven_context, EngineDrivenContextInline)
+        if uses_inline and shm_name and pool_size > 0:
+            # The server chose SHM for this worker, but the pool could not be
+            # attached; re-register so the server sends inline payloads too.
+            payload.force_inline = True
+            response = self._submit_registration(
+                lambda: self._req_client.register_kv_cache_engine_driven_context(
+                    payload
+                )
+            ).result(timeout=mq_timeout)
+            if (
+                not isinstance(response, RegisterEngineDrivenContextResponse)
+                or response.shm_name
+            ):
+                raise RuntimeError(
+                    f"Failed to attach LMCache SHM pool {shm_name!r} and the "
+                    "server did not switch this worker to inline transfer"
+                )
+        supported_transfer_mode = "inline" if uses_inline else "SHM"
         logger.info(
             "Worker engine-driven context registered "
             "(instance_id=%d, mode=%s, groups=%d)",

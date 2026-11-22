@@ -338,12 +338,20 @@ class EngineDrivenTransferModule(DiscoverableModule, InstanceLivenessTarget):
         """
         shm_name = self._shm_pool_info["shm_name"]
         pool_size = self._shm_pool_info["pool_size"]
+        if payload.force_inline:
+            shm_name, pool_size = "", 0
 
         now = time.monotonic()
         with self._lock:
             existing = self._engine_driven_contexts.get(payload.instance_id)
             if existing is not None:
                 existing.last_seen = now
+                if payload.force_inline:
+                    # The worker re-registers after failing to attach the
+                    # SHM pool it was sent; no transfer has used it yet.
+                    self._strategies[payload.instance_id] = self._create_strategy(
+                        shm_name, pool_size
+                    )
                 logger.info(
                     "Instance %d already registered (non-GPU); refreshing liveness",
                     payload.instance_id,
@@ -438,16 +446,7 @@ class EngineDrivenTransferModule(DiscoverableModule, InstanceLivenessTarget):
             last_seen=now,
             has_liveness_signal=False,
         )
-        strategy: TransferStrategy = create_transfer_strategy(
-            self._ctx.storage_manager,
-            read_owner_resolver=self._ctx.get_read_owners,
-            shm_name=shm_name,
-            pool_size=pool_size,
-            pending_writes=self._pending_shm_writes,
-            pending_reads=self._pending_shm_reads,
-            pending_lock=self._pending_shm_lock,
-            transfer_key_factory=self._make_transfer_key,
-        )
+        strategy = self._create_strategy(shm_name, pool_size)
         with self._lock:
             self._engine_driven_contexts[payload.instance_id] = entry
             self._strategies[payload.instance_id] = strategy
@@ -501,6 +500,27 @@ class EngineDrivenTransferModule(DiscoverableModule, InstanceLivenessTarget):
             shm_name=shm_name,
             pool_size=pool_size,
             null_block_id=self._ctx.null_block_id,
+        )
+
+    def _create_strategy(self, shm_name: str, pool_size: int) -> TransferStrategy:
+        """Create the transfer strategy for one registered worker.
+
+        Args:
+            shm_name: SHM pool name the worker uses, or ``""`` for inline.
+            pool_size: SHM pool size in bytes, or ``0`` for inline.
+
+        Returns:
+            The SHM strategy when a pool is given, otherwise the inline one.
+        """
+        return create_transfer_strategy(
+            self._ctx.storage_manager,
+            read_owner_resolver=self._ctx.get_read_owners,
+            shm_name=shm_name,
+            pool_size=pool_size,
+            pending_writes=self._pending_shm_writes,
+            pending_reads=self._pending_shm_reads,
+            pending_lock=self._pending_shm_lock,
+            transfer_key_factory=self._make_transfer_key,
         )
 
     @request_handler(operation="unregister_kv_cache_engine_driven_context")
